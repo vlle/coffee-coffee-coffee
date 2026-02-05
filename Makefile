@@ -1,5 +1,5 @@
 .PHONY: dev dev-backend dev-frontend build-frontend preview-frontend \
-	docker-up docker-down docker-logs
+	docker-up docker-down docker-logs db-up db-down
 
 dev:
 	$(MAKE) -j 2 dev-backend dev-frontend
@@ -24,3 +24,9 @@ docker-down:
 
 docker-logs:
 	docker compose logs -f
+
+db-up:
+	docker compose up -d db
+
+db-down:
+	docker compose stop db

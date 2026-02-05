@@ -139,3 +139,11 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# App data
+uploads/
+data/
+postgres-data/
+
+# Build artifacts
+backend/main

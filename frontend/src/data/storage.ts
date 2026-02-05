@@ -110,3 +110,14 @@ export const deleteOutboxItem = async (id: string): Promise<void> => {
     tx.onerror = () => reject(tx.error)
   })
 }
+
+export const clearOutbox = async (): Promise<void> => {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(OUTBOX_STORE, 'readwrite')
+    const store = tx.objectStore(OUTBOX_STORE)
+    store.clear()
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}

@@ -10,6 +10,7 @@ import {
 import type { Entry, EntryPayload, OutboxItem } from './data/types'
 import {
   clearEntries,
+  clearOutbox,
   deleteEntry,
   deleteOutboxItem,
   getAllEntries,
@@ -22,7 +23,14 @@ import {
   createEntry,
   deleteEntry as deleteEntryRemote,
   fetchEntries,
+  getAuthToken,
+  getPushConfig,
   updateEntry,
+  loginUser,
+  registerUser,
+  sendTestPush,
+  setAuthToken,
+  subscribePush,
 } from './data/api'
 
 type Locale = 'en' | 'ru'
@@ -52,6 +60,20 @@ const translations = {
     emptyState: 'No entries yet. Start with your first brew.',
     editEntry: 'Edit entry',
     deleteEntry: 'Delete entry',
+    signIn: 'Sign In',
+    createAccount: 'Create Account',
+    signingIn: 'Working...',
+    working: 'Working...',
+    signOut: 'Sign out',
+    emailPlaceholder: 'Email',
+    passwordPlaceholder: 'Password (min 8 chars)',
+    notifications: 'Notifications',
+    notificationsEnabled: 'Enabled',
+    notificationsUnavailable: 'Unavailable in this browser',
+    notificationsDenied: 'Permission denied',
+    notificationsHint: 'Enable brew alerts',
+    enable: 'Enable',
+    test: 'Test',
   },
   ru: {
     appTitle: 'Кофейный журнал',
@@ -77,6 +99,20 @@ const translations = {
     emptyState: 'Пока нет записей. Добавьте первую.',
     editEntry: 'Редактировать запись',
     deleteEntry: 'Удалить запись',
+    signIn: 'Войти',
+    createAccount: 'Создать аккаунт',
+    signingIn: 'Подождите...',
+    working: 'Подождите...',
+    signOut: 'Выйти',
+    emailPlaceholder: 'Почта',
+    passwordPlaceholder: 'Пароль (минимум 8)',
+    notifications: 'Уведомления',
+    notificationsEnabled: 'Включены',
+    notificationsUnavailable: 'Недоступны в браузере',
+    notificationsDenied: 'Доступ запрещен',
+    notificationsHint: 'Включите напоминания',
+    enable: 'Включить',
+    test: 'Тест',
   },
 } as const
 
@@ -143,6 +179,10 @@ const emptyForm = () => ({
 })
 
 export default function CoffeeLog() {
+  const [token, setToken] = useState<string | null>(() => getAuthToken())
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [authForm, setAuthForm] = useState({ email: '', password: '' })
+  const [authLoading, setAuthLoading] = useState(false)
   const [locale, setLocale] = useState<Locale>(() => {
     if (typeof window === 'undefined') return 'en'
     const stored = window.localStorage.getItem('coffee_log_locale')
@@ -156,6 +196,9 @@ export default function CoffeeLog() {
     'idle'
   )
   const [error, setError] = useState<string | null>(null)
+  const [pushStatus, setPushStatus] = useState<
+    'idle' | 'enabled' | 'unsupported' | 'denied' | 'loading'
+  >('idle')
   const text = translations[locale]
 
   useEffect(() => {
@@ -208,6 +251,7 @@ export default function CoffeeLog() {
   }, [])
 
   const processOutbox = useCallback(async () => {
+    if (!token) return
     const items = await refreshOutbox()
     for (const item of items) {
       try {
@@ -230,9 +274,10 @@ export default function CoffeeLog() {
         break
       }
     }
-  }, [refreshOutbox])
+  }, [refreshOutbox, token])
 
   const runSync = useCallback(async () => {
+    if (!token) return
     if (!navigator.onLine) {
       setSyncState('offline')
       return
@@ -250,13 +295,15 @@ export default function CoffeeLog() {
       setError(message)
       setSyncState('offline')
     }
-  }, [processOutbox, refreshOutbox, syncFromServer])
+  }, [processOutbox, refreshOutbox, syncFromServer, token])
 
   useEffect(() => {
+    if (!token) return
     loadLocal().then(refreshOutbox).then(runSync)
-  }, [loadLocal, refreshOutbox, runSync])
+  }, [loadLocal, refreshOutbox, runSync, token])
 
   useEffect(() => {
+    if (!token) return
     const handleOnline = () => runSync()
     const handleOffline = () => setSyncState('offline')
     window.addEventListener('online', handleOnline)
@@ -266,6 +313,20 @@ export default function CoffeeLog() {
       window.removeEventListener('offline', handleOffline)
     }
   }, [runSync])
+
+  useEffect(() => {
+    if (!token) return
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setPushStatus('unsupported')
+      return
+    }
+    navigator.serviceWorker.ready
+      .then((registration) => registration.pushManager.getSubscription())
+      .then((subscription) => {
+        setPushStatus(subscription ? 'enabled' : 'idle')
+      })
+      .catch(() => setPushStatus('idle'))
+  }, [token])
 
   const startEdit = (entry: Entry) => {
     setEditingId(entry.id)
@@ -281,6 +342,40 @@ export default function CoffeeLog() {
   const resetForm = () => {
     setEditingId(null)
     setForm(emptyForm())
+  }
+
+  const handleAuthSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setError(null)
+    setAuthLoading(true)
+    try {
+      const payload =
+        authMode === 'register'
+          ? await registerUser(authForm.email, authForm.password)
+          : await loginUser(authForm.email, authForm.password)
+      setAuthToken(payload.token)
+      setToken(payload.token)
+      setAuthForm({ email: '', password: '' })
+      await clearEntries()
+      await clearOutbox()
+      setEntries([])
+      setOutbox([])
+      await runSync()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Authentication failed'
+      setError(message)
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    setAuthToken(null)
+    setToken(null)
+    setEntries([])
+    setOutbox([])
+    await clearEntries()
+    await clearOutbox()
   }
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -364,6 +459,140 @@ export default function CoffeeLog() {
     await runSync()
   }
 
+  const urlBase64ToUint8Array = (base64String: string) => {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+    const rawData = window.atob(base64)
+    const outputArray = new Uint8Array(rawData.length)
+    for (let i = 0; i < rawData.length; i += 1) {
+      outputArray[i] = rawData.charCodeAt(i)
+    }
+    return outputArray
+  }
+
+  const enableNotifications = async () => {
+    if (!token) return
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setPushStatus('unsupported')
+      return
+    }
+    setPushStatus('loading')
+    const permission = await Notification.requestPermission()
+    if (permission !== 'granted') {
+      setPushStatus('denied')
+      return
+    }
+    const config = await getPushConfig()
+    if (!config.publicKey) {
+      setError('Push keys are not configured on the server.')
+      setPushStatus('idle')
+      return
+    }
+    const registration = await navigator.serviceWorker.ready
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(config.publicKey),
+    })
+    await subscribePush(subscription)
+    setPushStatus('enabled')
+  }
+
+  const triggerTestNotification = async () => {
+    setError(null)
+    try {
+      await sendTestPush()
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to send notification'
+      setError(message)
+    }
+  }
+
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-[#FDFBF7] text-[#2C2C2C] font-sans flex justify-center p-4">
+        <div className="w-full max-w-md bg-white border border-[#E5E0D8] shadow-sm rounded-xl overflow-hidden">
+          <div className="bg-[#2C2C2C] text-[#FDFBF7] p-4 flex items-center justify-between">
+            <h1 className="text-xl font-serif font-semibold tracking-wide flex items-center gap-2">
+              <Coffee size={20} />
+              {text.appTitle}
+            </h1>
+            <div className="hidden sm:flex items-center gap-1 ml-2 border border-white/30 rounded-full px-1 py-0.5 text-[11px] uppercase tracking-widest">
+              {(['en', 'ru'] as Locale[]).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setLocale(option)}
+                  className={`px-2 py-0.5 rounded-full ${
+                    locale === option ? 'bg-white text-[#2C2C2C]' : 'text-white/70'
+                  }`}
+                  aria-pressed={locale === option}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          </div>
+          <form onSubmit={handleAuthSubmit} className="p-5 space-y-4">
+            <div className="flex gap-2 text-xs uppercase tracking-widest text-stone-400">
+              {(['login', 'register'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setAuthMode(mode)}
+                  className={`px-3 py-1 rounded-full border ${
+                    authMode === mode
+                      ? 'border-[#2C2C2C] text-[#2C2C2C]'
+                      : 'border-[#E5E0D8] text-stone-500'
+                  }`}
+                >
+                  {mode === 'login' ? text.signIn : text.createAccount}
+                </button>
+              ))}
+            </div>
+            <input
+              type="email"
+              placeholder={text.emailPlaceholder}
+              value={authForm.email}
+              onChange={(event) =>
+                setAuthForm({ ...authForm, email: event.target.value })
+              }
+              className="w-full bg-white border border-[#E5E0D8] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#8B5A2B]"
+              required
+            />
+            <input
+              type="password"
+              placeholder={text.passwordPlaceholder}
+              value={authForm.password}
+              onChange={(event) =>
+                setAuthForm({ ...authForm, password: event.target.value })
+              }
+              className="w-full bg-white border border-[#E5E0D8] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#8B5A2B]"
+              minLength={8}
+              required
+            />
+            {error && (
+              <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                {error}
+              </div>
+            )}
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="w-full bg-[#2C2C2C] text-[#FDFBF7] py-3 rounded-lg font-bold text-base shadow-lg active:scale-[0.98] transition-all disabled:opacity-70"
+            >
+              {authLoading
+                ? text.signingIn
+                : authMode === 'login'
+                ? text.signIn
+                : text.createAccount}
+            </button>
+          </form>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-[#FDFBF7] text-[#2C2C2C] font-sans flex justify-center p-4">
       <div className="w-full max-w-md bg-white border border-[#E5E0D8] shadow-sm rounded-xl overflow-hidden">
@@ -408,6 +637,13 @@ export default function CoffeeLog() {
                 </button>
               ))}
             </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="ml-2 text-[11px] uppercase tracking-widest text-stone-300 hover:text-white"
+            >
+              {text.signOut}
+            </button>
           </div>
         </div>
 
@@ -552,6 +788,46 @@ export default function CoffeeLog() {
         </form>
 
         <div className="border-t border-[#E5E0D8] px-5 py-4 bg-[#FAF9F6]">
+          <div className="mb-4 rounded-lg border border-[#E5E0D8] bg-white p-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs uppercase tracking-widest text-stone-500">
+                  {text.notifications}
+                </div>
+                <div className="text-xs text-stone-400">
+                  {pushStatus === 'enabled'
+                    ? text.notificationsEnabled
+                    : pushStatus === 'unsupported'
+                    ? text.notificationsUnavailable
+                    : pushStatus === 'denied'
+                    ? text.notificationsDenied
+                    : text.notificationsHint}
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={enableNotifications}
+                  disabled={
+                    pushStatus === 'enabled' ||
+                    pushStatus === 'loading' ||
+                    pushStatus === 'unsupported' ||
+                    pushStatus === 'denied'
+                  }
+                  className="px-3 py-2 rounded-lg border border-[#E5E0D8] text-xs font-semibold text-stone-600 disabled:opacity-50"
+                >
+                  {pushStatus === 'loading' ? text.working : text.enable}
+                </button>
+                <button
+                  type="button"
+                  onClick={triggerTestNotification}
+                  className="px-3 py-2 rounded-lg border border-[#E5E0D8] text-xs font-semibold text-stone-600"
+                >
+                  {text.test}
+                </button>
+              </div>
+            </div>
+          </div>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold uppercase tracking-widest text-stone-500">
               {text.recentBrews}
