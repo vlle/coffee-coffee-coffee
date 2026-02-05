@@ -3,32 +3,22 @@ version: '3.8'
 services:
   backend:
     build: ./backend
-    ports:
-      - "8080:8080"
+    container_name: coffee-backend
     volumes:
       - ./uploads:/app/uploads
       - ./data:/app/data
     networks:
-      - coffee-net
+      - web
 
   frontend:
     build: ./frontend
-    ports:
-      - "80:80"
-      - "443:443"
+    container_name: coffee-frontend
     depends_on:
       - backend
-    # Optional: Persist Caddy data for SSL/internal storage
-    volumes:
-      - caddy_data:/data
-      - caddy_config:/config
     networks:
-      - coffee-net
-
-volumes:
-  caddy_data:
-  caddy_config:
+      - web
 
 networks:
-  coffee-net:
-    driver: bridge
+  web:
+    external: true
+    name: $DOCKER_MY_NETWORK
