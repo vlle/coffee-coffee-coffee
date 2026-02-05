@@ -1,0 +1,18 @@
+coffe.vlle.ru {
+    # Set the root directory for the frontend build
+    root * /usr/share/caddy
+
+    # Enable compression
+    encode gzip
+
+    # Handle the SPA routing (redirect all 404s to index.html)
+    try_files {path} /index.html
+
+    # Proxy API requests to the Go backend
+    handle_path /api/* {
+        reverse_proxy backend:8080
+    }
+
+    # Serve static files
+    file_server
+}
