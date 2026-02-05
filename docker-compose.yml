@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: coffee-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: coffee
+      POSTGRES_USER: coffee
+      POSTGRES_PASSWORD: coffee
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    networks:
+      - web
+
+  backend:
+    build: ./backend
+    container_name: coffee-backend
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://coffee:coffee@coffee-db:5432/coffee?sslmode=disable}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER:-coffee-log}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:you@example.com}
+    volumes:
+      - ./uploads:/app/uploads
+      - ./data:/app/data
+    networks:
+      - web
+
+  frontend:
+    build: ./frontend
+    container_name: coffee-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    # Optional: Persist Caddy data for SSL/internal storage
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - web
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  web:
+    external: true
+    name: ${DOCKER_MY_NETWORK}
